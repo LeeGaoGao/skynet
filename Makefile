@@ -5,7 +5,7 @@ CSERVICE_PATH ?= cservice
 
 SKYNET_BUILD_PATH ?= .
 
-CFLAGS = -g -O2 -Wall -I$(LUA_INC) $(MYCFLAGS)
+CFLAGS = -g -O2 -Wall -I$(LUA_INC) $(MYCFLAGS) -DLUA_COMPAT_5_2
 # CFLAGS += -DUSE_PTHREAD_LOCK
 
 # lua
@@ -48,12 +48,21 @@ jemalloc : $(MALLOC_STATICLIB)
 update3rd :
 	rm -rf 3rd/jemalloc && git submodule update --init
 
+# lfs
+
+LFS_SRC := 3rd/luafilesystem/src/lfs.c
+LFS_INC := 3rd/luafilesystem/src
+LFS_SO := $(LUA_CLIB_PATH)/lfs.so
+
+$(LFS_SO): $(LFS_SRC) 3rd/luafilesystem/src/lfs.h | $(LUA_CLIB_PATH)
+	$(CC) $(CFLAGS) $(SHARED) -I$(LUA_INC) -I$(LFS_INC) $< -o $@
+
 # skynet
 
 CSERVICE = snlua logger gate harbor
 LUA_CLIB = skynet \
   client \
-  bson md5 sproto lpeg $(TLS_MODULE)
+  bson md5 sproto lpeg lfs $(TLS_MODULE)
 
 LUA_CLIB_SKYNET = \
   lua-skynet.c lua-seri.c \
