@@ -18,6 +18,8 @@ local context = {
 do
 	local require = _G.require
 	local loaded = package.loaded
+	package.loadpath = package.loadpath or {}
+	local loadpath = package.loadpath
 	local loading = {}
 
 	function M.require(name)
@@ -72,9 +74,16 @@ do
 				f()
 			end
 
+			print(string.format("加载文件:%s", filename))
+
 			m = m or env
 
+			if m.__init__ then
+				m.__init__()
+			end
+
 			loaded[name] = m
+			loadpath[filename] = name
 		end
 
 		local ok, err = xpcall(execute_module, debug.traceback)
