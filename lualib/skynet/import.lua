@@ -78,8 +78,8 @@ do
 
 			m = m or env
 
-			if m.__init__ then
-				m.__init__()
+			if m.__Init__ then
+				m.__Init__()
 			end
 
 			loaded[name] = m
