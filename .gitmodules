@@ -7,3 +7,6 @@
 [submodule "3rd/lua-zset"]
 	path = 3rd/lua-zset
 	url = https://github.com/LeeGaoGao/lua-zset.git
+[submodule "3rd/serpent"]
+	path = 3rd/serpent
+	url = https://github.com/LeeGaoGao/serpent.git

@@ -47,9 +47,11 @@ skynet.register_protocol {
 	name = "client",
 	id = skynet.PTYPE_CLIENT,
 	unpack = function (msg, sz)
+		skynet.error("recv", skynet.tostring(msg, sz))
 		return host:dispatch(msg, sz)
 	end,
 	dispatch = function (fd, _, type, ...)
+		skynet.error("dispatch", type, ...)
 		assert(fd == client_fd)	-- You can use fd to reply message
 		skynet.ignoreret()	-- session is fd, don't call skynet.ret
 		skynet.trace()

@@ -99,7 +99,8 @@ local function dispatch_package()
 end
 
 send_request("handshake")
-send_request("set", { what = "hello", value = "world" })
+--send_request("set", { what = "hello", value = "world" })
+send_request("get", { what = "hello" })
 while true do
 	dispatch_package()
 	local cmd = socket.readstdin()
