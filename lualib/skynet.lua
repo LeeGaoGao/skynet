@@ -42,6 +42,7 @@ local skynet = {
 	PTYPE_LUA = 10,
 	PTYPE_SNAX = 11,
 	PTYPE_TRACE = 12,	-- use for debug trace
+	PTYPE_RPC = 13,	-- use for rpc
 }
 
 -- code cache
@@ -1052,6 +1053,13 @@ do
 		id = skynet.PTYPE_ERROR,
 		unpack = function(...) return ... end,
 		dispatch = _error_dispatch,
+	}
+
+	REG {
+		name = "rpc",
+		id = skynet.PTYPE_RPC,
+		pack = skynet.pack,
+		unpack = skynet.unpack,
 	}
 end
 
