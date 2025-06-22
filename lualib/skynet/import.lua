@@ -30,16 +30,38 @@ do
 
 		local co, main = coroutine.running()
 		if main then
-			return require(name)
+			-- 在主线程中，创建一个模块环境
+			local env = {}
+			setmetatable(env, { __index = _G })
+			
+			local filename = package.searchpath(name, package.path)
+			if not filename then
+				return require(name)
+			end
+			
+			local modfunc = loadfile(filename, "bt", env)
+			if not modfunc then
+				return require(name)
+			end
+			
+			local result = modfunc(name, filename)
+			-- 如果文件返回了值，使用返回值；否则使用环境表
+			local mod = result ~= nil and result or env
+
+			loaded[name] = mod
+			loadpath[filename] = mod
+			return mod
 		end
 
 		local filename = package.searchpath(name, package.path)
 		if not filename then
-			return require(name)
+			error(string.format("module '%s' not found", name))
 		end
 
+		-- 创建环境，使用 _G 作为基础环境
 		local env = {}
 		setmetatable(env, { __index = _G })
+		
 		local modfunc = loadfile(filename, "bt", env)
 		if not modfunc then
 			return require(name)
@@ -74,16 +96,13 @@ do
 				f()
 			end
 
-			print(string.format("加载文件:%s", filename))
+			print(string.format("导入模块:%s, 路径:%s", name, filename))
 
-			m = m or env
-
-			if m.__Init__ then
-				m.__Init__()
-			end
+			-- 如果模块返回了值，使用返回值；否则使用环境表
+			m = m ~= nil and m or env
 
 			loaded[name] = m
-			loadpath[filename] = name
+			loadpath[filename] = m
 		end
 
 		local ok, err = xpcall(execute_module, debug.traceback)
