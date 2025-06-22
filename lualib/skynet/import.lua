@@ -18,8 +18,8 @@ local context = {
 do
 	local require = _G.require
 	local loaded = package.loaded
-	package.loadpath = package.loadpath or {}
-	local loadpath = package.loadpath
+	package.loadinfo = package.loadinfo or {}
+	local loadinfo = package.loadinfo
 	local loading = {}
 
 	function M.require(name)
@@ -49,7 +49,12 @@ do
 			local mod = result ~= nil and result or env
 
 			loaded[name] = mod
-			loadpath[filename] = mod
+			
+			-- 存储模块信息到 loadinfo，只保存 module_content
+			loadinfo[filename] = {
+				module_content = mod
+			}
+			
 			return mod
 		end
 
@@ -102,7 +107,11 @@ do
 			m = m ~= nil and m or env
 
 			loaded[name] = m
-			loadpath[filename] = m
+			
+			-- 存储模块信息到 loadinfo，只保存 module_content
+			loadinfo[filename] = {
+				module_content = m
+			}
 		end
 
 		local ok, err = xpcall(execute_module, debug.traceback)

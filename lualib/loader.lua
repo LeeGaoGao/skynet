@@ -45,7 +45,9 @@ if LUA_PRELOAD then
 	LUA_PRELOAD = nil
 end
 
+_G.hotfix = require "skynet.hotfix"
 --_G.require = (require "skynet.require").require
 _G.require = (require "skynet.import").require
+
 
 main(select(2, table.unpack(args)))
