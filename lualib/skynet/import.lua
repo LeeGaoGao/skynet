@@ -10,6 +10,7 @@ local M = {}
 
 local mainthread, ismain = coroutine.running()
 assert(ismain, "skynet.require must initialize in main thread")
+local lfs = require "lfs"
 
 local context = {
 	[mainthread] = {},
@@ -24,38 +25,13 @@ do
 
 	function M.require(name)
 		local m = loaded[name]
-		if m ~= nil then
-			return m
+		if m then
+			return m.result or m.env or m
 		end
 
 		local co, main = coroutine.running()
 		if main then
-			-- 在主线程中，创建一个模块环境
-			local env = {}
-			setmetatable(env, { __index = _G })
-			
-			local filename = package.searchpath(name, package.path)
-			if not filename then
-				return require(name)
-			end
-			
-			local modfunc = loadfile(filename, "bt", env)
-			if not modfunc then
-				return require(name)
-			end
-			
-			local result = modfunc(name, filename)
-			-- 如果文件返回了值，使用返回值；否则使用环境表
-			local mod = result ~= nil and result or env
-
-			loaded[name] = mod
-			
-			-- 存储模块信息到 loadinfo，只保存 module_content
-			loadinfo[filename] = {
-				module_content = mod
-			}
-			
-			return mod
+			return require(name)
 		end
 
 		local filename = package.searchpath(name, package.path)
@@ -103,15 +79,19 @@ do
 
 			print(string.format("导入模块:%s, 路径:%s", name, filename))
 
-			-- 如果模块返回了值，使用返回值；否则使用环境表
-			m = m ~= nil and m or env
+			local fileInfo = lfs.attributes(filename)
+			if not fileInfo then
+				print(string.format("无法获取文件信息: %s", filename))
+			end
 
-			loaded[name] = m
+			loaded[name] = {
+				result = m,
+				env = env,
+				loadtime = fileInfo and fileInfo.modification,
+			}
 			
 			-- 存储模块信息到 loadinfo，只保存 module_content
-			loadinfo[filename] = {
-				module_content = m
-			}
+			loadinfo[filename] = loaded[name]
 		end
 
 		local ok, err = xpcall(execute_module, debug.traceback)
@@ -128,7 +108,7 @@ do
 		loading[name] = nil
 
 		if ok then
-			return loaded[name]
+			return loaded[name].result or loaded[name].env
 		else
 			error(err)
 		end

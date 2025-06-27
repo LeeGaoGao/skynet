@@ -8,17 +8,20 @@ local M = {}
 
 -- 配置常量
 local CONFIG = {
-    setmetatable = true,
-    pairs = true,
-    ipairs = true,
-    next = true,
-    require = true,
-    _ENV = true,
-    pcall = true,
-    xpcall = true,
-    load = true,
-    loadfile = true,
+	_ENV = true,
+	skynet = true,
+	lfs = true,
+	package = true,
+	debug = true,
+	coroutine = true,
+	io = true,
+	os = true,
+	string = true,
+	table = true,
+	math = true,
+	utf8 = true,
 }
+setmetatable(CONFIG, { __index = _G })	
 
 -- 防止重复的table替换，造成死循环
 local visited_sig = {}
@@ -52,130 +55,167 @@ local function get_indent(depth)
 	return indent
 end
 
+-- @return value 要使用的那个值
+local function update_upvalue(new_v, old_v, field, path)
+	local new_type = type(new_v)
+	local old_type = type(old_v)
+	if new_type ~= old_type then return new_v end
+
+	if new_type == 'table' then
+		local new_value
+		for _field, _value in pairs(old_v) do
+			new_value = new_v[_field]
+			if new_value then
+				if type(new_value) == 'table' then
+					new_v[_field] = update_upvalue(new_value, _value, _field, path .. "->" .. _field)
+				elseif type(new_value) == 'function' then
+					new_v[_field] = update_upvalue(new_value, _value, _field, path .. "->" .. _field)
+				else
+					new_v[_field] = _value
+				end
+			end
+		end
+		return new_v
+	elseif new_type == 'function' then
+		local upvalue_map = {}
+		for i = 1, math.huge do
+			local name, value = debug.getupvalue(old_v, i)
+			if not name then break end
+
+			if not CONFIG[name] then
+				upvalue_map[name] = value
+			end
+		end
+
+		local old_value
+		for i = 1, math.huge do
+			local name, value = debug.getupvalue(new_v, i)
+			if not name then break end
+
+			old_value = upvalue_map[name]
+
+			if old_value and old_value ~= value then
+				-- table: 旧的table 里的值添加到新的中
+				-- function: 函数用新的,upvalue 递归
+				-- other: 用旧的
+				value = update_upvalue(value, old_value, name, path .. "->" .. name)
+				debug.setupvalue(new_v, i, value)
+			end
+		end
+
+		return new_v
+	else
+		return old_v
+	end
+end
+
 -- 更新函数，处理upvalue的对比和替换
-local function update_func(new_func, old_func, name, depth)
-	if not new_func or not old_func then return end
+local function update_func(new_env, old_env, field, path)
+	if not new_env or not old_env or not field then return end
 	
-	local indent = get_indent(depth)
-	debug_print(string.format("%s[函数更新] 开始处理函数: %s (深度: %d)", indent, name, depth))
-	
-	-- 取得原函数所有的upvalue，保存起来
-	local old_upvalue_map = {}
-	local old_upvalue_count = 0
+	local old_func = old_env[field]
+	local new_func = new_env[field]
+	if not old_func or not new_func then return end
+	if old_func == new_func then return end
+	if type(old_func) ~= type(new_func) then return end
+
+	local upvalue_map = {}
 	for i = 1, math.huge do
 		local name, value = debug.getupvalue(old_func, i)
 		if not name then break end
-		old_upvalue_map[name] = value
-		old_upvalue_count = old_upvalue_count + 1
+
+		if not CONFIG[name] then
+			upvalue_map[name] = value
+		end
 	end
-	debug_print(string.format("%s[函数更新] 原函数有 %d 个upvalue", indent, old_upvalue_count))
-	
-	-- 遍历新函数的所有upvalue，根据名字和原值对比
-	local new_upvalue_count = 0
-	local updated_upvalue_count = 0
+
+	local old_value
 	for i = 1, math.huge do
 		local name, value = debug.getupvalue(new_func, i)
 		if not name then break end
-		new_upvalue_count = new_upvalue_count + 1
-		local old_value = old_upvalue_map[name]
-		if old_value then
-			debug_print(string.format("%s[函数更新] 处理upvalue: %s (类型: %s)", indent, name, type(value)))
-			-- 如果原函数中有同名的upvalue，保持原值
-			if type(old_value) ~= type(value) then
-				-- 类型不同，使用原值
-				debug_print(string.format("%s[函数更新]  类型不同，使用原值 (原类型: %s, 新类型: %s)", indent, type(old_value), type(value)))
-				debug.setupvalue(new_func, i, old_value)
-				updated_upvalue_count = updated_upvalue_count + 1
-			elseif type(old_value) == 'function' then
-				-- 都是函数，递归处理
-				debug_print(string.format("%s[函数更新]  递归处理函数upvalue: %s", indent, name))
-				update_func(value, old_value, name, depth + 1)
-				updated_upvalue_count = updated_upvalue_count + 1
-			elseif type(old_value) == 'table' then
-				-- 都是table，递归处理
-				debug_print(string.format("%s[函数更新]  递归处理table upvalue: %s", indent, name))
-				update_table(value, old_value, name, depth + 1)
-				-- 使用处理后的原值
-				debug.setupvalue(new_func, i, old_value)
-				updated_upvalue_count = updated_upvalue_count + 1
-			else
-				-- 其他类型，使用原值
-				debug_print(string.format("%s[函数更新]  使用原值 (类型: %s)", indent, type(old_value)))
-				debug.setupvalue(new_func, i, old_value)
-				updated_upvalue_count = updated_upvalue_count + 1
-			end
-		else
-			debug_print(string.format("%s[函数更新] 新upvalue: %s (类型: %s) - 保持新值", indent, name, type(value)))
+
+		old_value = upvalue_map[name]
+
+		if old_value and old_value ~= value then
+			-- table: 旧的table 里的值添加到新的中
+			-- function: 函数用新的,upvalue 递归
+			-- other: 用旧的
+			value = update_upvalue(value, old_value, name, path .. "->" .. name)
+			debug.setupvalue(new_func, i, value)
 		end
 	end
-	
-	debug_print(string.format("%s[函数更新] 函数 %s 处理完成 (新upvalue: %d, 更新upvalue: %d)", indent, name, new_upvalue_count, updated_upvalue_count))
 end
 
 -- 更新table，处理table内容的对比和替换
-local function update_table(new_t, old_t, name, depth)
-	if not new_t or not old_t then return end
-	
-	local indent = get_indent(depth)
-	debug_print(string.format("%s[Table更新] 开始处理table: %s (深度: %d)", indent, name, depth))
-	
-	-- 对某些关键函数不进行比对
-	if CONFIG[new_t] or CONFIG[old_t] then 
-		debug_print(string.format("%s[Table更新] 跳过保护对象: %s", indent, name))
-		return 
+local function update_table(new_env, old_env, field, path)
+	if not field or CONFIG[field] then return end
+
+	-- 都不存在的字段
+	if not new_env[field] or not old_env[field] then
+		debug_print(string.format("[热更新] 字段值:%s 都不存在.", field))
+		return
 	end
-	
-	-- 如果原值与当前值内存一致，值一样不进行对比
-	if new_t == old_t then 
-		debug_print(string.format("%s[Table更新] 相同对象，跳过: %s", indent, name))
-		return 
+
+	-- 值的类型不同
+	local old_value = old_env[field]
+	local new_value = new_env[field]
+	if type(old_value) ~= type(new_value) then
+		debug_print(string.format("[热更新] 字段值:%s 类型不同, 旧值:%s, 新值:%s", field, old_value, new_value))
+		return
 	end
-	
-	local signature = tostring(old_t)..tostring(new_t)
-	if visited_sig[signature] then 
-		debug_print(string.format("%s[Table更新] 已访问过，跳过: %s", indent, name))
-		return 
-	end
-	visited_sig[signature] = true
-	debug_print(string.format("%s[Table更新] 标记为已访问: %s", indent, name))
-	
-	-- 遍历对比值
-	local field_count = 0
-	local updated_count = 0
-	for field_name, value in pairs(new_t) do
-		field_count = field_count + 1
-		local old_value = old_t[field_name]
-		debug_print(string.format("%s[Table更新] 处理字段: %s (类型: %s)", indent, field_name, type(value)))
-		
-		if type(value) == type(old_value) then
-			if type(value) == 'function' then
-				debug_print(string.format("%s[Table更新]  递归处理函数字段: %s", indent, field_name))
-				update_func(value, old_value, field_name, depth + 1)
-				old_t[field_name] = value
-				updated_count = updated_count + 1
-			elseif type(value) == 'table' then
-				debug_print(string.format("%s[Table更新]  递归处理table字段: %s", indent, field_name))
-				update_table(value, old_value, field_name, depth + 1)
-				updated_count = updated_count + 1
-			else
-				debug_print(string.format("%s[Table更新]  相同类型字段，保持原值: %s", indent, field_name))
-			end
+
+	-- 更新旧表中存在的字段
+	for _field, _value in pairs(old_value) do
+		if type(_value) == 'table' then
+			-- 递归处理嵌套的table
+			update_table(new_value, old_value, _field, path .. "." .. _field)
+		elseif type(_value) == 'function' then
+			-- 用新的函数
+			update_func(new_value, old_value, _field, path .. "." .. _field)
 		else
-			debug_print(string.format("%s[Table更新]  类型不同，替换字段: %s (原类型: %s, 新类型: %s)", indent, field_name, type(old_value), type(value)))
-			old_t[field_name] = value
-			updated_count = updated_count + 1
+			-- 使用旧的
+			new_value[_field] = _value
+		end
+
+		debug_print(string.format("[热更新] 更新字段:%s, 值:%s", path .. "." .. _field, old_value[_field]))
+	end
+
+	-- 添加新表中存在的字段
+	for _field, _value in pairs(new_value) do
+		if not old_value[_field] then
+			old_value[_field] = _value
+			debug_print(string.format("[热更新] 添加字段:%s, 值:%s", path .. "." .. _field, old_value[_field]))
 		end
 	end
-	
-	-- 遍历table的元表，进行对比
-	local old_meta = debug.getmetatable(old_t)
-	local new_meta = debug.getmetatable(new_t)
-	if type(old_meta) == 'table' and type(new_meta) == 'table' then
-		debug_print(string.format("%s[Table更新] 处理元表: %s", indent, name))
-		update_table(new_meta, old_meta, safe_concat(name, "s Meta"), depth + 1)
+end
+
+-- 对比新旧两个 env 的内容
+local function check_env(new_env, old_env)
+	if not new_env or not old_env then
+		debug_print(string.format("[热更新] 存在未知的环境, 旧环境地址:%s, 新环境地址:%s", old_env or "nil", new_env or "nil"))
+		return
 	end
-	
-	debug_print(string.format("%s[Table更新] Table %s 处理完成 (字段数: %d, 更新数: %d)", indent, name, field_count, updated_count))
+
+	-- 替换和添加旧环境中存在的字段
+	for field, value in pairs(new_env) do
+		if type(value) == 'table' then
+			-- table 用旧的,替换表里的内容
+			update_table(new_env, old_env, field, "env")
+		elseif type(value) == 'function' then
+			-- function 用旧的,替换函数的 upvalue
+			update_func(new_env, old_env, field, "env")
+		else
+			-- 值用新的
+			old_env[field] = value
+		end
+	end
+
+	-- 删除旧的环境的值
+	for field, value in pairs(old_env) do
+		if not new_env[field] then
+			old_env[field] = nil
+		end
+	end
 end
 
 -- 对整个文件进行热更新
@@ -185,21 +225,17 @@ function M.hotfix_file(path)
 		return false
 	end
 
-	debug_print(string.format("=== 开始热更新文件: %s ===", path))
-
 	local module_info = package.loadinfo[path]
 	if not module_info then
 		debug_print(string.format("文件未加载: %s", path))
 		return false
 	end
 
-	local oldmod = module_info.module_content
-	if not oldmod then
-		debug_print(string.format("模块内容为空: %s", path))
+	local old_env = module_info.env
+	if not old_env then
+		debug_print(string.format("文件代码环境不存在: %s", path))
 		return false
 	end
-
-	debug_print(string.format("模块类型: %s", type(oldmod)))
 
 	local file_str
 	local fp = io.open(path, "r")
@@ -218,24 +254,15 @@ function M.hotfix_file(path)
 	
 	debug_print(string.format("文件大小: %d 字节", #file_str))
 	
-	-- 清空访问标记
-	visited_sig = {}
-	debug_print("已清空访问标记")
-	
-	-- 定义env的table，并为env设置_G访问权限
-	local env = {}
-	setmetatable(env, { __index = _G })
-	debug_print("已创建环境表")
-	
 	-- 加载代码块
-	local f, load_err = load(file_str, path, 't', env)
+	local new_env = {}
+	setmetatable(new_env, { __index = _G })
+	local f, load_err = load(file_str, path, 't', new_env)
 	if not f then
 		debug_print(string.format("Failed to load file: %s, error: %s", path, load_err or "unknown error"))
 		return false
 	end
-	
-	debug_print("代码块加载成功")
-	
+		
 	-- 执行代码块
 	local ok, result = pcall(f)
 	if not ok then
@@ -243,55 +270,9 @@ function M.hotfix_file(path)
 		return false
 	end
 
-	debug_print(string.format("代码块执行成功，返回值类型: %s", type(result)))
-
-	-- 确定新的模块内容（文件返回值或环境表）
-	local newmod = result ~= nil and result or env
-	debug_print(string.format("新模块类型: %s", type(newmod)))
-	
-	-- 对比新旧模块内容
-	local update_count = 0
-	local total_fields = 0
-	
-	debug_print("=== 开始对比模块内容 ===")
-	for name, new_value in pairs(newmod) do
-		total_fields = total_fields + 1
-		local old_value = oldmod[name]
-		debug_print(string.format("[模块对比] 处理字段: %s (类型: %s)", name, type(new_value)))
-		
-		if not old_value then
-			-- 新变量，直接添加
-			debug_print(string.format("[模块对比]  新字段，直接添加: %s", name))
-			oldmod[name] = new_value
-			update_count = update_count + 1
-		else
-			if type(old_value) ~= type(new_value) then
-				-- 类型不同，直接替换
-				debug_print(string.format("[模块对比]  类型不同，直接替换: %s (原类型: %s, 新类型: %s)", name, type(old_value), type(new_value)))
-				oldmod[name] = new_value
-				update_count = update_count + 1
-			elseif type(new_value) == 'function' then
-				-- 函数，需要处理 upvalue
-				debug_print(string.format("[模块对比]  递归处理函数: %s", name))
-				update_func(new_value, old_value, name, 1)
-				oldmod[name] = new_value
-				update_count = update_count + 1
-			elseif type(new_value) == 'table' then
-				-- table，递归更新
-				debug_print(string.format("[模块对比]  递归处理table: %s", name))
-				update_table(new_value, old_value, name, 1)
-				update_count = update_count + 1
-			else
-				-- 其他类型，直接替换
-				debug_print(string.format("[模块对比]  其他类型，直接替换: %s", name))
-				oldmod[name] = new_value
-				update_count = update_count + 1
-			end
-		end
-	end
+	check_env(new_env, old_env)
 	
 	debug_print(string.format("=== 热更新完成: %s ===", path))
-	debug_print(string.format("总字段数: %d, 更新字段数: %d", total_fields, update_count))
 	return true
 end
 
@@ -305,57 +286,56 @@ function M.CheckHotFix(not_print)
 		return false
 	end
 	
-	local updated_count = 0
-	local checked_count = 0
-	
 	debug_print("=== 开始检查热更新 ===")
 	
 	-- 遍历 loadinfo 中的所有文件
 	local fileInfo
 	for filename, module_info in pairs(package.loadinfo) do
-		checked_count = checked_count + 1
-		debug_print(string.format("[检查] 处理文件: %s", filename))
-		
-		fileInfo = lfs.attributes(filename)
-		if fileInfo then
-			if not module_info.loadtime then
-				-- 没有 loadtime，获取并保存
-				module_info.loadtime = fileInfo.modification
-				debug_print(string.format("[检查] 已保存文件修改时间: %s -> %s", filename, os.date("%Y-%m-%d %H:%M:%S", fileInfo.modification)))
-			else
-				if module_info.loadtime ~= fileInfo.modification then
-					debug_print(string.format("[检查] 文件 %s 修改时间发生变化: %s -> %s", filename, os.date("%Y-%m-%d %H:%M:%S", module_info.loadtime), os.date("%Y-%m-%d %H:%M:%S", fileInfo.modification)))
-
-					-- 执行热更新
-					local success = M.hotfix_file(filename)
-					if success then
-						updated_count = updated_count + 1
-						debug_print(string.format("[检查] 热更新成功: %s", filename))
-					else
-						debug_print(string.format("[检查] 热更新失败: %s", filename))
-					end
-
-					-- 更新修改时间
+		if not module_info.result then
+			debug_print(string.format("[检查] 处理文件: %s", filename))
+			fileInfo = lfs.attributes(filename)
+			if fileInfo then
+				if not module_info.loadtime then
+					-- 没有 loadtime，获取并保存
 					module_info.loadtime = fileInfo.modification
+					debug_print(string.format("[检查] 设置文件修改时间: %s -> %s", filename, os.date("%Y-%m-%d %H:%M:%S", fileInfo.modification)))
 				else
-					debug_print(string.format("[检查] 文件未变化: %s", filename))
+					if module_info.loadtime ~= fileInfo.modification then
+						debug_print(string.format("[检查] 文件 %s 修改时间发生变化: %s -> %s", filename, os.date("%Y-%m-%d %H:%M:%S", module_info.loadtime), os.date("%Y-%m-%d %H:%M:%S", fileInfo.modification)))
+
+						-- 更新修改时间
+						module_info.loadtime = fileInfo.modification
+
+						-- 执行热更新
+						local success = M.hotfix_file(filename)
+						if success then
+							debug_print(string.format("[检查] 热更新成功: %s", filename))
+						else
+							debug_print(string.format("[检查] 热更新失败: %s", filename))
+						end
+					end
 				end
+			else
+				debug_print(string.format("[检查] 无法获取文件信息: %s", filename))
 			end
-		else
-			debug_print(string.format("[检查] 无法获取文件信息: %s", filename))
 		end
 	end
-	
-	debug_print("=== 检查完成 ===")
-	if updated_count > 0 then
-		debug_print(string.format("批量热更新完成，检查了 %d 个文件，更新了 %d 个文件", checked_count, updated_count))
-	else
-		debug_print(string.format("没有文件需要热更新，检查了 %d 个文件", checked_count))
-	end
-	
-	return updated_count > 0
 end
 
 return M
 
 
+
+
+--[[
+全局 table
+	以新表为准,保存数据的模块不允许热更, 否则会导致数据丢失
+
+
+
+
+
+
+
+
+]]
