@@ -19,14 +19,21 @@ local context = {
 do
 	local require = _G.require
 	local loaded = package.loaded
-	package.loadinfo = package.loadinfo or {}
-	local loadinfo = package.loadinfo
 	local loading = {}
 
 	function M.require(name)
 		local m = loaded[name]
 		if m then
-			return m.result or m.env or m
+			if type(m) == "table" then
+				if m.__RESULT__ then
+					return m.__RESULT__
+				end
+				if m.__ENV__ then
+					return m.__ENV__
+				end
+			end
+
+			return m
 		end
 
 		local co, main = coroutine.running()
@@ -37,6 +44,7 @@ do
 		local filename = package.searchpath(name, package.path)
 		if not filename then
 			error(string.format("module '%s' not found", name))
+			return require(name)
 		end
 
 		-- 创建环境，使用 _G 作为基础环境
@@ -85,13 +93,11 @@ do
 			end
 
 			loaded[name] = {
-				result = m,
-				env = env,
-				loadtime = fileInfo and fileInfo.modification,
+				__PATH__ = filename,
+				__RESULT__ = m,
+				__ENV__ = env,
+				__LOADTIME__ = fileInfo and fileInfo.modification,
 			}
-			
-			-- 存储模块信息到 loadinfo，只保存 module_content
-			loadinfo[filename] = loaded[name]
 		end
 
 		local ok, err = xpcall(execute_module, debug.traceback)
@@ -108,7 +114,7 @@ do
 		loading[name] = nil
 
 		if ok then
-			return loaded[name].result or loaded[name].env
+			return loaded[name].__RESULT__ or loaded[name].__ENV__
 		else
 			error(err)
 		end
