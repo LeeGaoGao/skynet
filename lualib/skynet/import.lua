@@ -43,7 +43,7 @@ do
 
 		local filename = package.searchpath(name, package.path)
 		if not filename then
-			error(string.format("module '%s' not found", name))
+			print(string.format("module '%s' not found", name))
 			return require(name)
 		end
 
